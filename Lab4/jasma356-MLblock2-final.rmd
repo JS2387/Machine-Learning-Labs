@@ -1,0 +1,431 @@
+---
+title: "ML Block 2 - Wine Quality"
+author: "Jaskirat S Marar (jasma356)"
+date: "01/23/2021"
+output: pdf_document
+bibliography: winequality.bib
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(dplyr)
+library(glmnet)
+library(plotmo)
+library(glmnet)
+library(ggfortify)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(nnet)
+library(randomForest)
+```
+
+# Wine Quality Dataset
+
+This data set is a collection of physicochemical variables with a sensory output as the quality of wine. The wine under consideration here is a Portuguese wine called "Vinho Verde". The data is separately available for both the white and red wine variants of this brand.[@CORTEZ2009547]
+
+The various attributes in this dataset are as follows:
+
+|S.No.|Attribute|Details|Type|
+|-|---|---|---|
+|1|fixed acidity|tartaric acid *g/dm^3^*|Input|
+|2|volatile acidity|acetic acid *g/dm^3^*|Input|
+|3|citric acid|*g/dm^3^*|Input|
+|4|residual sugar|*g/dm^3^*|Input|
+|5|chlorides|Sodium Chloride *g/dm^3^*|Input|
+|6|free sulfur dioxide|*mg/dm^3^*|Input|
+|7|total sulfur dioxide|*mg/dm^3^*|Input|
+|8|density|*g/cm^3^*|Input|
+|9|pH||Input|
+|10|sulphates|Potassium Sulphate *g/dm^3^*|Input|
+|11|alcohol|vol%|Input|
+|12|Quality|Score(0-10)|Sensory Output|
+
+The dataset is available on UCI ML repository [here](https://archive.ics.uci.edu/ml/datasets/wine+quality)
+
+The data is also being attached with report as a zip file.
+
+# Research Objective
+
+This data set gives us the opportunity to build different prediction models for determining the quality of wines using our predictor variables. So I will be attempting different techniques learned during the course to estimate/classify quality of wine using the predictor variables available to us in the data set. 
+
+## Models used and experimental design
+
+I decided to go with the following approach in this project:
+
+1. Data Exploration to identify outliers, correlations and any other data cleanup requirement.
+2. Multiclass logistic regression
+3. PCA for rebasing the data and check for improved model prediction using principal components as features
+4. Decision Trees for a rule based approach.
+5. Random Forests for improved accuracy over Decision Trees.
+
+
+*Note: based on the feedback provided on the my first attempt I have decided to forego attempting this problem as a linear regression even though the class variable is numeric. Based on the feedback provided I have now completely presented this report as a solution to a classification problem.*
+
+\newpage
+
+# Data Exploration
+
+We'll start the data exploration by looking at the spread of quality of wines available in our data.
+
+```{r, echo = FALSE}
+#combine red & white wine data
+
+redW <- read.csv("winequality/winequality-red.csv", sep = ";")
+whiteW <- read.csv("winequality/winequality-white.csv", sep = ";")
+
+redW$type <- "red"
+whiteW$type <- "white"
+
+wine_comb <- rbind(redW, whiteW)
+
+#check for split in quality of wines in dataset
+hist(wine_comb$quality, main = "Wine Quality")
+```
+From the initial assessment of the spread in quality of different wines available in the dataset, we find that majority of the data is from wines that measure between 5-7 in terms of quality. There are very less wines of very high or very low quality in the dataset.
+
+We'll now check for outliers that might impact modelling
+
+```{r, echo = FALSE}
+# checking for na values in the data
+table(is.na(wine_comb))
+
+# checking for outliers in the data
+par(mfrow = c(2,6))
+for (i in 1:11) {
+  boxplot(wine_comb[i])
+}
+```
+
+We can see that almost all data attributes have outliers associated with them. Removing outliers can be a debatable topic since, offhandedly we cant know if the outlier that we remove may or may not be responsible for explaining significant phenomenon in the data. Hence, by removing outliers we are increasing the bias in our model because we want a better fit. In this, since this data is a classification problem, we also run the risk of making the problem imbalanced if it turns out that the outliers belong more to a particular class over other classes.      
+
+But, since our dataset is relatively small I am choosing to eliminate these outliers for better a better fitted model and higher classification accuracy. I will use the Z-score method to remove outliers, where I will remove those outliers which have $|Z_{score}|>3\sigma$ from mean.
+
+```{r, echo = FALSE}
+#removing outliers
+z_scores <- as.data.frame(sapply(wine_comb[1:11], 
+                                 function(df) (abs(df-mean(df))/sd(df))))
+
+z_scores <- cbind.data.frame(z_scores, wine_comb[12:13])
+
+wine_no_outlier <- wine_comb[!rowSums(z_scores[,1:11]>3), ]
+
+#recheck boxplots
+#checking for outliers in the data
+par(mfrow = c(2,6))
+for (i in 1:11) {
+  boxplot(wine_no_outlier[i])
+}
+
+par(mfrow = c(2,6))
+for (i in 1:12) {
+  hist(wine_no_outlier[[i]], xlab = names(wine_no_outlier)[i])
+}
+
+rm(i, z_scores)
+
+```
+
+As we observe, due to removal of outliers, most of the features are normally distributed, also given the fact that we are only dealing with 11 features we will choose not to scale the data unless required for modelling.
+
+Now we do a cursory check for collinearity.
+
+```{r, echo = FALSE}
+#collinearity
+wine_corr <- cor(wine_no_outlier[,1:11])
+wine_corr <- round(wine_corr,2)
+wine_corr
+cat('\n')
+rm(wine_corr)
+```
+
+
+There doesn't seem to be any strong correlations that we may have to address before pushing forward with our analysis. The strongest correlation that we were able to observe is between the pair of density and alcohol and also in total.SO~2~ vs free.SO~2~
+
+We'll now scale the data because we will be attempting multinomial logistic regression and need the data to be scaled. We also split our data into training and test data sets in a 70-30 ratio.
+
+```{r, echo = FALSE}
+
+scaled_wine <- wine_no_outlier
+scaled_wine[,1:11] <- scale(scaled_wine[, 1:11])
+scaled_wine[,12] <- as.factor(scaled_wine[,12])
+
+#split into train and test 70-30 and scaling
+
+n <- dim(scaled_wine)[1]
+set.seed(12345)
+id <- sample(1:n, floor(n*0.7))
+train <- as.data.frame(scaled_wine[id,])
+test <- as.data.frame(scaled_wine[-id,])
+
+rm(id, n)
+
+
+```
+
+# Logistic Regression
+
+As mentioned before, this data is best suited as a classification problem. So I will first start with a basic multiclass logistic regression model. The multiclass problem we have to extend the scalar valued function representing $P(y = 1|x)$ into a vector valued function (M-dimensional for M classes) with each individual class probabilities as its elements. Here a softmax function is used instead of the logistic function from the binary classification problem. The same can be written as follows:
+
+$$
+\mathbf{g(x)} = softmax(z) \ ; \ where \ \mathbf{z} = [\theta_1^T \ \theta_2^T \ \theta_3^T \ ... \theta_M^T]^T
+$$
+Each individual class probability or element of the M-dimensional vector can be written as:
+
+$$
+g_m(\mathbf{X}) = \frac{e^{\theta_m^T X}}{\sum_{j=1}^{M}e^{\theta_j^T X}} \ ; \ where \ m = 1,...,M
+$$
+I used the multinom() from the nnet package to train the multiclass logistic model for this dataset.
+
+```{r, echo=FALSE}
+#Logistic regression
+
+fit <- quality ~ fixed.acidity+
+                  volatile.acidity+
+                  citric.acid+
+                  residual.sugar+
+                  chlorides+
+                  free.sulfur.dioxide+
+                  total.sulfur.dioxide+
+                  density+
+                  pH+
+                  sulphates+
+                  alcohol
+
+logis_model <- multinom(fit, train)
+
+summary(logis_model)
+
+```
+I will now check for the accuracy of the model by reporting the confusion matrices for both train and test data. For this I will utilize the confusionMatrix() from the caret package. This reports the confusion matrix, accuracy and other terms related to the confusion matrix that can help us interpret the results of the model.
+
+```{r, echo=FALSE}
+cat("\n Confusion matrix for Training data: \n")
+#confusion matrix for train data
+confusionMatrix(predict(logis_model),train[,12])
+
+cat("\n Confusion matrix for Test data: \n")
+#confusion matrix for train data
+confusionMatrix(predict(logis_model, newdata = test), test[,12])
+
+```
+
+From the results we can see that the overall accuracy of the model is 55% for the training data and 54% for the test data. The overall accuracy only tells us that the model is predicting unseen data almost as well as the training data. If I look at the statistics by each class, we can see that the model is giving a decent true positive rate for the 2 largest classes in the data i.e. wines of quality 5 and 6, but the for all the other classes, the true positivity rate is 21% for wine quality '7' and zero for others. So the misclassification is very high for all the wines of either high or low quality. On a hunch, I want to check if my earlier decision of removing outliers might have had an impact on this model.
+
+```{r, echo=FALSE}
+
+scaled_wine1 <- wine_comb
+scaled_wine1[,1:11] <- scale(scaled_wine1[, 1:11])
+scaled_wine1[,12] <- as.factor(scaled_wine1[,12])
+
+#split into train and test 70-30 and scaling
+
+n <- dim(scaled_wine1)[1]
+set.seed(12345)
+id <- sample(1:n, floor(n*0.7))
+train1 <- as.data.frame(scaled_wine1[id,])
+test1 <- as.data.frame(scaled_wine1[-id,])
+
+rm(id, n)
+
+logis_model1 <- multinom(fit, train1)
+
+cat("\n Confusion matrix for Training data: \n")
+#confusion matrix for train data
+confusionMatrix(predict(logis_model1),train1[,12])
+
+cat("\n Confusion matrix for Test data: \n")
+#confusion matrix for train data
+confusionMatrix(predict(logis_model1, newdata = test1), test1[,12])
+
+
+```
+The misclassification rates for the lower and higher wine quality samples have improved slightly. Still the model is not giving a high sensitivity for these classes though. 
+
+Conclusions:
+
+Removing outliers has improved the prediction sensitivity for the median classes i.e. 5, 6 & 7. But this came at the cost of misclassification for the higher and lower quality classes. In this problem, we are evaluating wine qualities and the quality of a wine will determine if it is a regular commodity or a luxury commodity with a very high price tag. Thus, it is important to have a model that can classify well across all classes and not just the median classes. We should not remove outliers since they are obviously essential to classification of the higher and lower wine qualities. Especially because our current model is classifying all the higher quality wines as mid-range wines, this can lead to a potential revenue loss to the wine maker.
+
+Now before I move onto a different classification technique altogether, I'll attempt to improve the classification model by using PCA and consequently applying the multiclass logistic regression on the Principal Components. 
+
+# PCA
+
+By running our data through this analysis, we will be learning a lower dimension representation $\mathbf{z} \in \mathbb{R}^q$ of the data $\mathbf{x} \in \mathbb{R}^{11}$ where $q < 11$  projecting the data observations onto a *q*-dimensional linear subspace of the original data. To do this, we have already scaled and centered our data, which is important because we will be encoding a linear combination of the original data to form our new representation of the data and if the data is not centered, then features with different variability will overwhelm the 'smoother' features in our resulting PCs. Since, we don't need to decide the lower dimension *'q'* before hand, we can obtain the solution for all values of *q* and later pick our components that best represent the variance of the data. Therefore, a single SVD (singular value decomposition) applied on $\mathbf X_0$ i.e. our centered and scaled data gives us the latent representation for all values of *q* as follows:
+
+$$
+\mathbf {Z_0} = X_0 V 
+$$
+where, V corresponds to the eigenvectors of the new basis representation.
+
+The actual implementation of the above is done using the prcomp() function as follows:
+
+```{r, echo = FALSE}
+
+rm(scaled_wine, test, train, wine_no_outlier)
+
+pc_wine <- prcomp(scaled_wine1[,1:11], cor = TRUE)
+
+pc_wine
+
+summary(pc_wine)
+
+screeplot(pc_wine, type = 'l')
+
+autoplot(pc_wine, 
+         data = scaled_wine1, 
+         colour = 'quality', 
+         loadings = TRUE, 
+         loadings.label = TRUE)
+
+```
+
+The first 2 components together explain $\sim$ 50% of the variance. We get 11 PCs corresponding to the 11 features and in the plot, we can see 2 groupings (which I suspect might be due to the data being a  combination of red and white wines). By observing the direction of the loading vectors, we can also observe a correlation between the following features:
+
+1. free and total sulfur dioxide
+2. citric acid & residual sugar
+
+Using these PCs, we can now create a new regression model with our PCs as the new predictor variables for predicting quality of wines.
+
+
+```{r, echo = FALSE}
+fit_pc <- scaled_wine1$quality~pc_wine$x[,1]+pc_wine$x[,2]+pc_wine$x[,3]+
+                              pc_wine$x[,4]+pc_wine$x[,5]+pc_wine$x[,6]+
+                              pc_wine$x[,7]+pc_wine$x[,8]+pc_wine$x[,9]+
+                              pc_wine$x[,10]+pc_wine$x[,11]
+
+logis_model_pc <- multinom(fit_pc, scaled_wine1)
+
+summary(logis_model_pc)
+
+cat("\n Confusion matrix using PCA: \n")
+#confusion matrix
+confusionMatrix(predict(logis_model_pc),scaled_wine1[,12])
+
+
+
+```
+
+I wasn't able to improve the accuracy of the model much by using Principal components as features. Only sensitivity for class '3' & '7' showed any improvement. Misclassification for the higher classes i.e. 8 & 9 still remains very high. The overall accuracy of the model remained ~ 55%
+
+I'll try running employing the random forest approach to see if we are able to achieve better results.
+
+# Decision Trees
+
+To continue our deep dive into the wine quality data we will employ Decision Trees to classify our predictions and compare them to the results we have achieved so far. I use the rpart library to create the decision tree and use the classification method to get results.
+
+For learning a classification tree we compute the prediciton associated with each region by taking a majority vote and the split at the internal node is calculated by solving the following optimization problem:
+
+$$
+min_{j,s} \ n_1Q_1 \ + \ n_2Q_2
+$$
+where n1 & n2 are the number of training points on both nodes being considered. Q1 & Q2 are the costs or the prediction errors with these nodes. The splitting criteria used here will be the Gini index, defined as :
+
+$$
+Q_l = \sum_{m = 1}^{M}\hat{\pi}_{lm}(1-\hat{\pi}_{lm})
+$$
+where $\hat{\pi}_{lm}$ is the proportion of the training data points in the $l^{th}$ region belonging to class *'m'*
+
+When I first learned the model I found that only classes 5 & 6 got learned in the model. The reason for this lies in our initial data exploration. We know that most of the wines data is for wines of either quality 5,6 or 7. Because of this massive data imbalance, our Decision Tree is ignoring those smaller data points and only learning these 2 classifications. I figured out that I can change the controls for rpart() i.e. 
+
+1. minsplit i.e. smallest number of observations allowed in a parent node which can be split further. The default value is 20 hence all parent nodes with less than 20 observations get labelled as terminal nodes, 
+2. minbucket i.e. minimum number of observations allowed in a terminal node. A split decision breaking up the data into a node with less than this value will result in the node getting rejected, and
+3. cp or complexity parameter: which is the minimum improvement that the model needs at each node. It functions as a stopping parameter and has a default value of 0.01 to avoid formation of really deep trees.
+
+Unfortunately, this problem requires a deeper tree for the lower and higher wine qualities to be included in the Decision tree.
+
+
+```{r, echo = FALSE}
+DT_train <- rpart(fit, train1, method = "class", 
+                  minsplit = 2, minbucket = 1, cp = 0.0001,
+                  parms = list(split = c("gini")))
+
+rpart.plot(DT_train, digits = 3, fallen.leaves = TRUE)
+
+DT_predict_test <- predict(DT_train, test1, type = "class")
+
+summary(DT_predict_test)
+
+confmat <- confusionMatrix(DT_predict_test, test1[,12])
+confmat
+
+cat('\n')
+print(paste("Misclassification error for test : ", 
+            round(1-(sum(diag(confmat$table))/sum(confmat$table)),2)))
+
+```
+
+So by building a very deep Decision Tree we are able to improve the classification sensitivity for more classes. the overall accuracy of the decision tree has to ~61% and now we have decent true positive rates for classes '4' through '8'.
+
+I'll make one final attempt at improving the sensitivity for our lowest and highest quality of wines i.e. class '3' and class '9' by building on the improvement from decision trees and attempting to grow a random forest.
+
+# Random Forest
+
+Random forests are a bagging technique in which we sample with replacement from the training data because the training data is assumed to be a good representation of the population. By utilizing a bagging technique I am attempting to reduce the variance by averaging the class probabilities of each ensemble model. This should be particularly useful to solve our recurring problem of lower and higher wine quality classes getting misclassified in our models thus far due to a lack of training observations. By bootstrapping the training data set we might be able to coerce a model that is able to improve the sensitivity for the lower and higher quality classes.
+
+THe principle of random forest is that at each node split, we dont consider all input variables, instead a random subset is picked with lesser number of variables being considered for splitting. This increases the chances of the lower and higher quality classes being considered as a different training subset is used for each ensemble decision tree. So, while the individual variance of each tree might increase but overall prediction variance of the model is expected to decrease.
+
+We implement the random forest using the randomForest library.
+
+```{r, echo=FALSE}
+#fit random forest model
+rf_model <- randomForest(
+  formula = fit,
+  data = train1,
+  ntree = 700
+)
+
+#display fitted model
+rf_model
+
+#display test MSE by number of trees
+plot(rf_model)
+
+#produce variable importance plot
+varImpPlot(rf_model)
+
+```
+So the output of the random forest shows us that we have grown a forest with 1000 trees and 3 variables tried for each tree. We can already see improved results as we are now getting predictions for the higher and lower classes now. From the plot we can see that after around 400 trees the error has stabilized. From the variable importance plot we can see that the variables that contribute most to the model are alcohol, volatile acidity and density. This is inline with what we saw when we plotted the principal component loadings earlier. There we saw that these 3 features were standing out from the rest.
+
+Lets see the results for the test data
+
+```{r, echo=FALSE}
+RF_predict_test <- predict(rf_model, test1, type = "class")
+
+summary(RF_predict_test)
+
+confmat <- confusionMatrix(RF_predict_test, test1[,12])
+confmat
+
+```
+So, we've been able to further improve our classification accuracy to ~69%. But most of this improvement is coming from a higher sensitivity in our median classes i.e. 5,6 & 7. Infact the sensitivity for class 4 has reduced while out extreme end classes 3 & 9 remain plagued with high misclassification errors.
+
+
+# Discussion
+
+The wines dataset is not particularly complicated to understand and the dataset is more or less very clean. it required minimum cleaning and even removal of outliers didnt result in a huge of loss of data. But as I was able to later conclude, that removing outliers was doing more harm than good in this case. I was able to do a lot with this data and ended up employing multiple models to get a thorough understanding of this data. While I have detailed my findings in the construction of this report, I would summarize some of my key takeaways as follows:
+
+1. The data is very skewed in terms of the quality of wines captured. The biggest drawback of this was the inability to improve classification for the hgihest and lowest quality wines. This can be problematic in the real world because high quality wines can become luxury goods.
+2. While I was able to gradually improve the accuracy of the model, I feel that data skewness really prevents better classification results. Off the top of my head, from the techniques I did not explore, building a neural network classification model might help in improving the prediction accuracy here. The reason I would expect this is because the classification neural network builds on the softmax parametrization that I used in the beginning and the multiclass logistic regression is a simple case of neural network with a single hidden layer. That said, the wine dataset does not really have a lot features which would potentially benefit for a deep learning network and necessarily provide a better output. Sometimes for a simpler dataset a simpler model is the most efficient one!   
+
+
+\newpage
+
+# APPENDIX - CODE
+
+```{r ref.label= knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
+
+\newpage
+
+# References
+
+
+
+
+
+
+
+
+

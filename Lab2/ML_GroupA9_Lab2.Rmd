@@ -1,0 +1,657 @@
+---
+title: "Machine Learning - Lab 2"
+author: "Hussnain Khalid (huskh803), Jaskirat S Marar (jasma356), Daniel Persson (danpe586)"
+date: "12/03/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r dependencies, echo=FALSE, warning=FALSE, message=FALSE}
+# loading packages
+library(glmnet)
+library(car)
+library(ROCR)
+library(tree)
+library(ggplot2)
+library(ggfortify)
+library(dplyr)
+library(reshape2)
+```
+
+# Statement of Contribution
+For solving this lab, the group decided to split the responsibility equally by assigning 1 question to each
+member. The split by mutual consensus was as follows:
+
+ * Assignment 1: Solution and report by Daniel Persson
+ 
+ * Assignment 2: Solution and report by Hussnain Khalid
+ 
+ * Assignment 3: Solution and report by Jaskirat Marar
+ 
+We were able to communicate with each other effectively and responsibly. All the group members were forthcoming in discussing issues being faced while solving the problems. We were able to each present our solution to the others well before the deadline and were able to conclude on the structure and content of the final report.
+
+*"We acknowledge that each member has contributed fairly and equally in solving this lab."*
+
+*By undersigned:*
+
+*Hussnain Khalid*
+
+*Jaskirat Marar*
+
+*Daniel Persson*
+
+
+
+
+\newpage
+
+# 1. Assignment 1 - Explicit regularization
+
+### 1.1 Linear Regression
+
+The probabilistic model is:
+$$
+\pmb{Y} \sim N(\pmb{\beta}^T\pmb{X}, \sigma^2)
+$$
+
+
+```{r 1.1a, echo=FALSE}
+
+# ASSIGNMENT 1
+
+# Load the data
+fat_data <- read.csv("data/tecator.csv")
+# split data train/test (50/50)
+n <- dim(fat_data)[1]
+set.seed(12345)
+id <- sample(1:n, floor(n*0.5))
+train <- as.data.frame(fat_data[id,])
+test <- as.data.frame(fat_data[-id,])
+```
+
+The summary of the fit model is: 
+```{r 1.1b, echo=FALSE}
+channels <- as.data.frame(train[,-1])
+channels <- as.data.frame(channels[,-(102:103)])
+# fit model on train data
+fit_train <- lm(train$Fat ~ ., channels)
+summary(fit_train)
+scatterplot(train[,102], fit_train$fitted.values, boxplots = FALSE,  smooth = FALSE, xlab = "Predicted", ylab = "Actual fat", main = "Train data")
+```
+
+The summary of the model is used later to explain the quality of the model. 
+
+```{r 1.1c, echo=FALSE}
+# test model on test data
+p_test <- predict(fit_train, test)
+```
+
+The mean square error (MSE) for the train data is
+
+```{r 1.1d, echo=FALSE}
+# mean square error train
+n2 <- nrow(train)
+actual_fat_train <- train[,102]
+MSE_train <- 1/n2*sum((actual_fat_train-fitted(fit_train))^2)
+MSE_train
+```
+
+The mean square error (MSE) for the test data is
+
+```{r 1.1e, echo=FALSE}
+# mean square error test
+n1 <- nrow(test)
+actual_fat_test <- test[,102]
+MSE_test <- 1/n1*sum((actual_fat_test-p_test)^2)
+MSE_test
+```
+
+Since the MSE for the test data is much higher than the train data, the predicted data versus the actual data is plotted in a scatter plot. The MSE for the test data is much higher since there are a point that really does not fit the model. While for the train data there is almost a perfect fit. This leads to the conclusion that the model is overfitted for the train data and the trained model is not suitable for the test data. That the adjusted $R^2 = 0.9994$ support this overfitted train data theory. 
+
+```{r 1.1f, echo=FALSE}
+# scatter plot of test data 
+scatterplot(p_test, test[,102], boxplots = FALSE,  smooth = FALSE, xlab = "Predicted", ylab = "Actual fat", main = "Test data")
+```
+
+### 1.2 The LASSO cost function
+
+The LASSO cost function is 
+$$
+\frac{1}{n}|| \pmb{X}\pmb{\beta} - \pmb{y}||_2^2 + \lambda||\pmb{\beta}||_1
+$$
+
+### 1.3 LASSO regression
+
+```{r 1.3a, echo=FALSE}
+x <- as.matrix(channels[,-101])
+y <- as.matrix(train$Fat)
+fit_lasso <- glmnet(x, y, family = "gaussian", alpha=1) # LASSO
+# plot the LASSO
+plot(fit_lasso, xvar = "lambda", label = TRUE, main = "LASSO")
+```
+
+By looking at the graph above it can be interpreted that as the penalty $\lambda$ increases the important channels will differ. Channel 41 has a high contribution as it does not go to 0 as fast as the other parameters. 
+
+By looking at the degrees of freedom in the print of the fit, it can be seen that the $\lambda$ in the interval from 0.7082 to 0.8530 gives a penalty factor with only three features.
+
+```{r 1.3b, echo=FALSE}
+print(fit_lasso)
+```
+
+### 1.4 Ridge regression
+
+```{r 1.4, echo=FALSE}
+fit_ridge <- glmnet(x, y, family = "gaussian", alpha = 0)
+plot(fit_ridge, xvar = "lambda", label = TRUE, main = "Ridge")
+
+```
+One conclusion is that ridge is not suitable for many variables since all the coefficients go towards 0 at the same time. 
+
+### 1.5 Cross-validation and scatterplot
+
+```{r 1.5a, echo=FALSE}
+set.seed(12345)
+fit_cv <- cv.glmnet(x, y, alpha=1, family="gaussian")
+# plot(fit_cv)
+```
+![](MSE vs log lambda.png)
+
+The $\lambda$ that gives the smallest cross validation error is:
+```{r 1.5b, echo=FALSE}
+lambda_min <- fit_cv$lambda.min
+lambda_min
+```
+and the number of variables chosen were 9, according to the plot. The $\log \lambda =-4$ is not statistically significantly better since is has the same MSE as the min lambda but more dependent variables.  
+
+```{r 1.5bb, echo=FALSE}
+no_lambda <- coef(fit_cv, s="lambda.min")
+# no_lambda
+```
+
+```{r 1.5c,echo=FALSE}
+# print(fit_cv)
+```
+
+According to the plot below, the fit for the optimal $\lambda$ is much better than the original model. 
+
+```{r 1.5d, echo=FALSE}
+opt_lambda <- predict(fit_cv, newx = as.matrix(test[,2:101]), type="response", s = lambda_min)
+scatterplot(opt_lambda, test[,102], boxplots = FALSE,  smooth = FALSE, xlab = "Predicted", ylab = "Actual fat")
+
+```
+The MSE of the LASSO model for the optimal $\lambda$ is
+
+```{r 1.5e, echo=FALSE}
+# mean square error LASSO
+MSE_opt_lambda <- 1/n2*sum((actual_fat_test-opt_lambda)^2)
+MSE_opt_lambda
+
+```
+And thus the LASSO model for the optimal $\lambda$ is a much better model, remember the linear regression model that had an MSE of 722. 
+
+\newpage
+
+# 2. Assignment 2 - Decision trees and logistic regression for bank marketing
+
+### 2.1
+```{r}
+
+# ASSIGNMENT 2
+
+# Data import
+df <- read.csv("data/bank-full.csv", stringsAsFactors = TRUE, sep=";", header=TRUE)
+# remove variable “duration”
+df=df[,-12]
+# Split data
+n=dim(df)[1]
+set.seed(12345)
+id=sample(1:n, floor(n*0.4))
+train=df[id,]
+id1=setdiff(1:n, id)
+set.seed(12345)
+id2=sample(id1, floor(n*0.3))
+valid=df[id2,]
+id3=setdiff(id1,id2)
+test=df[id3,]
+```
+
+
+### 2.2
+```{r, echo=FALSE, warning=FALSE}
+library(rpart)
+library(tree)
+```
+```{r}
+# Training models using training data and different parameters
+model_1 <- tree(y~., train)
+model_2 <- tree(y~., train, minsize=7000)
+model_3 <- tree(y~., train, mindev=0.0005)
+```
+```{r, echo=FALSE}
+pred_train_1 <- predict(model_1, train, type="class")
+pred_train_2 <- predict(model_2, train, type="class")
+pred_train_3 <- predict(model_3, train, type="class")
+pred_val_1 <- predict(model_1, valid, type="class")
+pred_val_2 <- predict(model_2, valid, type="class")
+pred_val_3 <- predict(model_3, valid, type="class")
+confm_train_1 <- table(predicted = pred_train_1, actual = train$y)
+confm_train_2 <- table(predicted = pred_train_2, actual = train$y)
+confm_train_3 <- table(predicted = pred_train_3, actual = train$y)
+confm_val_1 <- table(predicted = pred_val_1, actual = valid$y)
+confm_val_2 <- table(predicted = pred_val_2, actual = valid$y)
+confm_val_3 <- table(predicted = pred_val_3, actual = valid$y)
+mmce_train_1 <- 1 - (sum(diag(confm_train_1)) / sum(confm_train_1))
+mmce_train_2 <- 1 - (sum(diag(confm_train_2)) / sum(confm_train_2))
+mmce_train_3 <- 1 - (sum(diag(confm_train_3)) / sum(confm_train_3))
+mmce_training <- c(mmce_train_1 = mmce_train_1, mmce_train_2 = mmce_train_2, mmce_train_3 = mmce_train_3)
+mmce_val_1 <- 1 - (sum(diag(confm_val_1)) / sum(confm_val_1))
+mmce_val_2 <- 1 - (sum(diag(confm_val_2)) / sum(confm_val_2))
+mmce_val_3 <- 1 - (sum(diag(confm_val_3)) / sum(confm_val_3))
+mmce_validation <- c(mmce_val_1 = mmce_val_1, mmce_val_2 = mmce_val_2, mmce_val_3 = mmce_val_3)
+```
+Misclassification Error (training data):
+```{r, echo=FALSE}
+mmce_training
+```
+Misclassification Error (validation data):
+```{r, echo=FALSE}
+mmce_validation
+```
+The decision trees does not seem to be overfitted, since their is no big deviance between the misclassification rates of the two datasets. We noted that change in deviance to 0.0005 is resulting in more accurate classifications. And we also noted that setting the minimum node size to 7000 doesn't change the classification rate at all compared to the default settings.
+
+
+### 2.3
+Graph of 50 leaves of tree:
+
+
+```{r, echo=FALSE}
+train_trees <- c()
+valid_trees <- c()
+for(i in 2:50) {
+  prune_train <- prune.tree(model_3, best = i)
+  prune_pred <- predict(prune_train, newdata = valid, type = "tree")
+  train_trees[i] <- deviance(prune_train)
+  valid_trees[i] <- deviance(prune_pred)
+}
+plot(2:50, train_trees[2:50], type ="b", col="red", ylim = c(8000,12000), xlab="50 leaves of tree" )
+points(2:50, valid_trees[2:50], type="b", col="blue")
+```
+
+Optimal number of node:
+```{r, echo=FALSE}
+optimal_node<-which.min(valid_trees)
+optimal_node
+```
+The optimal number of nodes are those with the lowest deviance when validation data is used. In this case the optimal node is 22.
+
+
+And in order to make the decision model optimal following features are used:
+```{r, echo=FALSE}
+final_opt_tree <- prune.tree(model_3, best = optimal_node)
+pred_optimal <- predict(final_opt_tree, newdata = test, type="class")
+as.character(summary(final_opt_tree)$used)
+```
+
+
+### 2.4
+Confusion Matrix of optimal tree:
+```{r, echo=FALSE}
+confm_test <- table(predicted = pred_optimal, actual = test$y)
+confm_test
+```
+
+Misclassification Error of optimal tree:
+```{r, echo=FALSE}
+mmce_test <- 1 - sum(diag(confm_test)) / sum(confm_test)
+mmce_test
+```
+
+F1 Score of optimal tree:
+```{r, echo=FALSE}
+TN <- confm_test[1,1]; TP <- confm_test[2,2]; FN <- confm_test[1,2]; FP <- confm_test[2,1]
+precision <- (TP)/(TP+FP); recall_score <- (TP)/(TP+FN)
+f1_score <- 2*((precision*recall_score)/(precision+recall_score))
+f1_score
+```
+
+Accuracy of optimal tree:
+```{r, echo=FALSE}
+accuracy_model  <- (TP+TN)/(TP+TN+FP+FN)
+accuracy_model
+```
+The accuracy of the model is 0.8910351 This means almost 90% of predictions are correct, and hence the model has a good predictive power. But as we have imbalanced data we should prefer F1 score here.
+
+
+### 2.5
+```{r}
+loss_tree <- rpart(y~., data = train, method="class",
+                   parm = list(loss = matrix(c(0,5,1,0), byrow=TRUE, nrow=2)))
+```
+Confusion matrix of Loss matrix model:
+```{r, echo=FALSE}
+pred_loss <- predict(loss_tree, test, type="class")
+confm_loss <- table(predicted = pred_loss, actual = test$y)
+confm_loss
+```
+
+Misclassification Error of Loss matrix model:
+```{r, echo=FALSE}
+mmce_loss <- 1 - sum(diag(confm_loss))/sum(confm_loss)
+mmce_loss
+```
+Accuracy of Loss matrix model:
+```{r, echo=FALSE}
+TN_loss <- confm_loss[1,1]; TP_loss <- confm_loss[2,2]; FN_loss <- confm_loss[1,2]; FP_loss <- confm_loss[2,1]
+accuracy_model_loss  <- (TP_loss+TN_loss)/(TP_loss+TN_loss+FP_loss+FN_loss)
+accuracy_model_loss
+```
+The confusion matrix give us the mislassification rate 0.1168534, which means 11.6% misclassification. That is 1% more then in task 4 which is 0.1089649 means 10.8% misclassification. So we can say our optimal model is more accurate then loss matrix model.
+
+
+### 2.6
+Logistic regression model:
+```{r, echo=FALSE, warning=FALSE}
+library(ROCR)
+model_log <- glm(y~., 
+               family = binomial(link = "logit"),
+               data = train)
+model_log$call
+pred_log <- predict(model_log, test, type = "response")
+```
+
+
+Optimal tree model:
+```{r, echo=FALSE, warning=FALSE}
+summary(final_opt_tree)
+pred_opt_tree <- predict(final_opt_tree, newdata = test)
+```
+```{r, echo=FALSE}
+classify_tree <- list(); classify_log <- list(); confm_log <- list(); confm_opt_tree <- list(); tpr_log<-c(); fpr_log<-c(); tpr_tree<-c(); fpr_tree<-c(); pi<-seq(0.05,0.95,0.05)
+for(i in 1:length(pi)){
+  classify_tree <- factor(ifelse(pred_opt_tree[,2] > pi[i],  "yes", "no"), levels= c("no", "yes"))
+  classify_log <- factor(ifelse(pred_log > pi[i], "yes", "no"), levels= c("no", "yes"))
+  confm_opt_tree <- table(predicted = classify_tree, actual = test$y)
+  confm_log <- table(predicted = classify_log, actual = test$y)
+  fpr_tree[i] <- confm_opt_tree[2,1]/(confm_opt_tree[1,1]+confm_opt_tree[2,1])
+  tpr_tree[i] <- confm_opt_tree[2,2]/(confm_opt_tree[2,2]+confm_opt_tree[1,2])
+  fpr_log[i] <- confm_log[2,1]/(confm_log[1,1]+confm_log[2,1])
+  tpr_log[i] <- confm_log[2,2]/(confm_log[2,2]+confm_log[1,2])
+}
+plot(fpr_tree, tpr_tree, type="l", col="red", main = "ROC curve", xlab = "FPR", ylab = "TPR")
+lines(fpr_log, tpr_log, col="blue")
+legend(x=0.4, y=0.2 , legend=c('Opt_tree_Model', 'Log_Model'), lty=1:2, col=c("red", "blue"))
+```
+
+
+As both models ROC curve looks similar here so its hard to tell which one is better here. So precision recall curve could be a better choice to differentiate between them.
+
+\newpage
+
+# 3. Assignment 3 - PCA
+
+We first scaled all the variables except ViolentCrimesPerPop and implemented PCA using eigen by first calculating the covariance matrix of the scaled data sd then using the eigen() on the covariance matrix to get the eigen vectors. We obtain our PCs using the matrix multiplication between the scaled data and the eigen vectors.
+
+```{r, echo = FALSE}
+
+# ASSIGNMENT 3
+
+data <- read.csv("data/communities.csv")
+
+# scale all variables except ViolentCrimesPerPop
+scaled_data <- data %>% mutate(across(.cols = c(1:100), .fns = scale))
+
+# PCA using eigen()
+sigma_cov <- cov(scaled_data)
+eigen_check <- eigen(sigma_cov)
+pc.eigen <- as.matrix(scaled_data) %*% eigen_check$vectors
+```
+
+In order to check how many features are needed to obtain atleast 95% variance in the data, we calculate the variance explained by each PC using the following expression:
+
+$$
+Variance_{PCi} = \frac{eigen value_{PCi}}{\sum eigenvalues}
+$$
+
+The proportion of the variance explained by the first 2 PCs will be the first 2 values in the cumulative variance vector
+
+```{r, echo=FALSE}
+# Proportion of variance by first 2 components
+varexplained <- eigen_check$values / sum(eigen_check$values)
+varexplained[1:2]
+```
+The result shows that the the first 2 PCs explain ~25% and ~17% variance respectively. As for the rest of the PCs, we plot a curve to find out exactly where does the threshold lie for 95% variance
+
+```{r, echo=FALSE}
+# How many PC required to explain 95% variance
+var_cumsum <- cumsum(varexplained)
+pc_95 <- min(which(var_cumsum >=.95))
+pc_var_95 <- var_cumsum[pc_95]
+pc_plot_df <- data.frame(PC = c(1:101), var_cumsum)
+ggplot(pc_plot_df, aes(x = PC, y = var_cumsum)) + 
+  geom_line() + 
+  geom_point() +
+  geom_hline(yintercept=pc_var_95, linetype = 2) + 
+  annotate(geom = "text", x = 14, y = 0.98, label = ">95% Variance") +
+  geom_vline(xintercept = pc_95, linetype = 2) +
+  annotate(geom = "text", x = 42, y = 0.75, label = "35 PCs") +
+  geom_text(check_overlap = TRUE,
+    label = ">95% Variance explained by 35 PCs",
+    x = pc_95,
+    y = pc_var_95,
+    vjust = 32.2,
+    hjust = -0.25
+  )
+```
+What we find when searching within the variance vector is that we need 35 PCs to explain atleast 95% of the variance. The same has been plotted graphically for ease of interpretation.
+
+Now we move to the next part where we repeat the analysis using the princomp()
+
+```{r, echo=FALSE}
+# PCA using princomp()
+
+pc.prc <- princomp(scaled_data, cor = TRUE)
+```
+
+We are now interested in finding the number of significant features that contribute to PC1
+
+```{r, echo=FALSE}
+# featurewise contribution to PC1
+pc1_prc <- pc.prc$loadings[,1]
+pc1_prc_sorted <- sort(abs(pc1_prc), decreasing = TRUE)
+
+# top 5 features of PC1
+plot(pc1_prc_sorted)
+pc1_prc_top5 <- head(pc1_prc_sorted,5)
+pc1_prc_top5
+```
+As we can see from the plot, a lot of features contribute in a similar magnitude to PC1. We also sort them by magnitude to find which are the top 5 most significant contributors. The top contributors are:
+
+1. Median family income
+2. Median houshold income
+3. percent of kids in family housing with 2 parents
+4. percentage of households with investment / rent income
+5. percentage of families (with kids) that are headed by two parents
+
+The top two factors contributing to violent crimes seem to concern with income. This ties into the next set of important features as well which are also related to poverty levels, income levels etc. The second underlying theme in significant features seems to be kids in the family/household. It might seem to suggest that having multiple dependents in the household can also contribute to pressures resulting in the responsible adult leading to commit violent crimes.
+
+Below we show the plot of PC scores in [PC1, PC2] coordinates where the color of the points is given by ViolentCrimesPerPop
+
+```{r, echo=FALSE}
+# plot of PC scores
+autoplot(pc.prc, colour = "ViolentCrimesPerPop")
+```
+
+Now we will analyze the data by running a linear regression. We first scale the entire data before splitting into train and test before running linear regression on train data to find significant features and MSE.
+
+```{r, echo=FALSE}
+# Scale the original data
+
+fully_scaled_data <- scale(data)
+
+#Partition into train & test (50/50)
+n=dim(fully_scaled_data)[1]
+set.seed(12345) 
+id=sample(1:n, floor(n*0.5)) 
+train=fully_scaled_data[id,] 
+test=fully_scaled_data[-id,]
+##
+
+rm(id, n)
+
+
+# fit linear regression model to train data
+train_lm <- lm(ViolentCrimesPerPop ~ ., as.data.frame(train))
+
+# top 5 coefficients by magnitude
+top5_lm_features <- head(sort(abs(train_lm$coefficients), decreasing = TRUE), 5)
+top5_lm_features
+```
+In terms of magnitude of coefficients we have listed our top 5 results, but as we know this alone is not a conclusive summary. So we also look at the p-values to understand the significance of the coefficients and also compute the MSE for both training and test
+
+```{r, echo=FALSE}
+# verify most significant coefficients by p-values
+summary(train_lm)
+
+# MSE of train and test data
+MSE_train <- mean((fitted.values(train_lm) - train[,101])^2)
+MSE_test <- mean((predict(train_lm, newdata = as.data.frame(test)) - test[,101])^2)
+
+summary(train[,101])
+cat("\n MSE training:", MSE_train, "\n")
+
+summary(test[,101])
+cat("\n MSE test", MSE_test, "\n")
+```
+As we can see from the results of the linear regression, the the significant coefficients are different from what we got earlier. The training error seems within reasonable range as it is lower than the 1st quartile of the data. Test error using the fitted model, on the other hand, is higher than training. Overall the model shows a very high adj. R^2^ value but also shows overfitting.
+
+We will now create a loss function for the mean square error that depends on $\theta$ and the data. Since, for the optimization part of this problem, we have to compute the evolution of the MSE as the $\theta$ optimizes, we will use a trick to calculate the MSE with the loss function and assign it to a global array that stores the each individual MSE corresponding to the result of the optimization iterations.
+
+```{r}
+# optimize theta
+
+# define the loss function to calculate MSE for both train & test
+
+loss_function <- function(theta, X_train, Y_train, X_test, Y_test) {
+  error_train <- as.matrix(Y_train) - as.matrix(X_train) %*% theta
+  error_test <- as.matrix(Y_test) - as.matrix(X_test) %*% theta
+  optim_values_train[i] <<- mean(error_train^2)
+  optim_values_test[i] <<- mean(error_test^2)
+  i <<- i + 1
+  return(mean(error_train^2))
+}
+```
+
+In continuation, we will now define an optimization function which uses the BFGS method for optimizing $\theta$
+
+```{r}
+# define the optimization using BFGS method
+
+optim_loss <- function(theta, train, test) {
+  optim_result <- optim(par = theta, 
+                        fn = loss_function, 
+                        method = "BFGS", 
+                        X_train = train[,1:100], 
+                        Y_train = train[,101],
+                        X_test = test[,1:100], 
+                        Y_test = test[,101])
+  return(optim_result)
+}
+```
+
+To test our implementation, we will set the initial values of $\theta_0 = 0$ and we will discard the first 2000 values to properly observe the optimization.
+
+```{r, echo=FALSE}
+# testing optimization
+
+theta0 <- rep(0, 100)
+i <- 1
+optim_values_train <- c()
+optim_values_test <- c()
+optim_call <- optim_loss(theta = theta0, train, test)
+optim_call
+x_plot <- c(1:(i-2000))
+y_plot_train <- optim_values_train[2000:length(optim_values_train)]
+y_plot_test <- optim_values_test[2000:length(optim_values_test)]
+plot_error <- data.frame(iterations = x_plot, MSE_train = y_plot_train, MSE_test = y_plot_test)
+plot_MSE_melt <- melt(plot_error, id.vars = 1) 
+
+# plot the MSE for train and test for each iteration of theta optimization
+
+ggplot(plot_MSE_melt, aes(x = iterations, y = value, colour = variable)) + 
+  geom_point(size = 0.01) +
+  geom_hline(yintercept = optim_call$value, linetype = 2) +
+  annotate(geom = "text", x = 3500, y = 0.1255, label = "Train MSE Convergence") +
+  geom_hline(yintercept = optim_values_test[length(optim_values_test)], linetype = 2) +
+  annotate(geom = "text", x = 14000, y = 0.195, label = "Final Test MSE")
+```
+We see that the optimization converges to give us optimum values of $\theta$ that minimizes the MSE of the train data.
+
+We will now observe the MSE for both train and test data to see how it stack up against our earlier calculation using alternate methods
+
+```{r, echo=FALSE}
+# calculate MSE for optimized theta
+optim_MSE_train <- optim_call$value
+optim_MSE_test <- optim_values_test[length(optim_values_test)]
+
+cat("LM Train MSE = ", optim_MSE_train)
+cat("\n LM test MSE = ", optim_MSE_test)
+```
+We see that the computed MSE values match those from step 3 pretty closely although the training error is fractionally lower in step 3 vs here and the opposite is true for the test data in this step vs step3. If we look at the MSE plot closely we can see that a potentially acceptable solution may also lie much earlier than convergence when the test error is also lower that the final error value after convergence of $\theta$. This would lie somewhere close to iteration #9000, which would actually mean nearly half the computation time for the optimization, because as we can see from the data, that the convergence happened after ~20000 iterations. This is also true because our training error is well within control if compare it to the quartiles of the actual data. To check this we will update our optim function to specify a control argument with a relative tolerance of 10^{-4}^ and we see that we are able to achieve a convergence with 9862 iterations.
+
+```{r, echo=FALSE}
+optim_loss_control <- function(theta, train, test) {
+  optim_result <- optim(par = theta, 
+                        fn = loss_function, 
+                        method = "BFGS",
+                        control = list(reltol = 1e-10),
+                        X_train = train[,1:100], 
+                        Y_train = train[,101],
+                        X_test = test[,1:100], 
+                        Y_test = test[,101])
+  return(optim_result)
+}
+
+# testing optimization
+
+theta0 <- rep(0, 100)
+i <- 1
+optim_values_train <- c()
+optim_values_test <- c()
+optim_call <- optim_loss_control(theta = theta0, train, test)
+x_plot <- c(1:(i-2000))
+y_plot_train <- optim_values_train[2000:length(optim_values_train)]
+y_plot_test <- optim_values_test[2000:length(optim_values_test)]
+plot_error <- data.frame(iterations = x_plot, MSE_train = y_plot_train, MSE_test = y_plot_test)
+plot_MSE_melt <- melt(plot_error, id.vars = 1) 
+
+# plot the MSE for train and test for each iteration of theta optimization
+
+ggplot(plot_MSE_melt, aes(x = iterations, y = value, colour = variable)) + 
+  geom_point(size = 0.01) +
+  geom_hline(yintercept = optim_call$value, linetype = 2) +
+  annotate(geom = "text", x = 3500, y = 0.1255, label = "Train MSE Convergence") +
+  geom_hline(yintercept = optim_values_test[length(optim_values_test)], linetype = 2) +
+  annotate(geom = "text", x = 7000, y = 0.195, label = "Final Test MSE")
+
+# calculate MSE for optimized theta
+optim_MSE_train <- optim_call$value
+optim_MSE_test <- optim_values_test[length(optim_values_test)]
+
+cat("LM Controlled Train MSE = ", optim_MSE_train)
+cat("\n LM Controlled test MSE = ", optim_MSE_test)
+
+```
+
+As we postulated, we haven't lost too much accuracy on the MSE by using the early stopping criterion.
+
+\newpage
+
+# APPENDIX - CODE
+
+```{r ref.label= knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
+
+
